@@ -18,7 +18,7 @@ spec:
       containers:
         - name: auth-service
           # A tag é atualizada automaticamente pelo pipeline de CI (GitOps).
-          image: 432629467654.dkr.ecr.us-east-1.amazonaws.com/auth-service:latest
+          image: 432629467654.dkr.ecr.us-east-1.amazonaws.com/auth-service:v1.0.0-9ff6df5
           ports:
             - containerPort: 8001
           env:
