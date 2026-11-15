@@ -1,0 +1,117 @@
+# =============================================================================
+# OpenTelemetry Collector — peça CENTRAL da observabilidade.
+#
+# Roda como DaemonSet (um coletor por nó). Os microsserviços enviam traces e
+# métricas via OTLP para o coletor do próprio nó (HOST_IP:4317), e o coletor
+# também lê os logs de TODOS os contêineres do nó (/var/log/pods).
+#
+# Roteamento:
+#   métricas  ──► Prometheus (remote write)        + New Relic (OTLP)
+#   logs      ──► Loki (OTLP)                      + New Relic (só namespace togglemaster)
+#   traces    ──► New Relic APM (OTLP)
+# =============================================================================
+mode: daemonset
+
+image:
+  repository: otel/opentelemetry-collector-contrib
+
+presets:
+  # filelog receiver lendo /var/log/pods/* (logs de todos os contêineres do cluster)
+  logsCollection:
+    enabled: true
+    includeCollectorLogs: false
+  # k8sattributes: enriquece tudo com namespace, pod, deployment, nó...
+  kubernetesAttributes:
+    enabled: true
+
+# Licença do New Relic vem de um Secret (criado por scripts/create-observability-secrets.sh).
+extraEnvs:
+  - name: NEW_RELIC_LICENSE_KEY
+    valueFrom:
+      secretKeyRef:
+        name: newrelic-license
+        key: license-key
+        optional: true
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    memory: 512Mi
+
+ports:
+  jaeger-compact:
+    enabled: false
+  jaeger-thrift:
+    enabled: false
+  jaeger-grpc:
+    enabled: false
+  zipkin:
+    enabled: false
+
+config:
+  receivers:
+    jaeger: null
+    zipkin: null
+
+  processors:
+    # Identifica o cluster em todos os dados
+    resource/cluster:
+      attributes:
+        - key: k8s.cluster.name
+          value: togglemaster-eks
+          action: upsert
+    # Logs lidos dos arquivos não têm service.name: usamos o nome do contêiner
+    transform/logs-service-name:
+      log_statements:
+        - context: resource
+          statements:
+            - set(attributes["service.name"], attributes["k8s.container.name"]) where attributes["service.name"] == nil
+    # Para o New Relic vão só os logs da aplicação (namespace togglemaster)
+    filter/only-togglemaster:
+      error_mode: ignore
+      logs:
+        log_record:
+          - 'resource.attributes["k8s.namespace.name"] != "togglemaster"'
+    # O New Relic prefere métricas em "delta"; o Prometheus usa "cumulativo"
+    cumulativetodelta: {}
+
+  exporters:
+    # Métricas -> Prometheus (remote write receiver habilitado no kube-prometheus-stack)
+    prometheusremotewrite:
+      endpoint: http://kube-prometheus-stack-prometheus.observability.svc:9090/api/v1/write
+      resource_to_telemetry_conversion:
+        enabled: true   # service.name, k8s.* viram labels (service_name, k8s_deployment_name...)
+    # Logs -> Loki (ingestão OTLP nativa do Loki 3)
+    otlphttp/loki:
+      endpoint: http://loki.observability.svc:3100/otlp
+    # Traces, métricas e logs -> New Relic (APM) via OTLP
+    otlphttp/newrelic:
+      endpoint: https://otlp.nr-data.net
+      headers:
+        api-key: ${env:NEW_RELIC_LICENSE_KEY}
+      compression: gzip
+
+  service:
+    pipelines:
+      traces:
+        receivers: [otlp]
+        processors: [memory_limiter, k8sattributes, resource/cluster, batch]
+        exporters: [otlphttp/newrelic]
+      metrics:
+        receivers: [otlp, prometheus]
+        processors: [memory_limiter, k8sattributes, resource/cluster, batch]
+        exporters: [prometheusremotewrite]
+      metrics/newrelic:
+        receivers: [otlp]
+        processors: [memory_limiter, k8sattributes, resource/cluster, cumulativetodelta, batch]
+        exporters: [otlphttp/newrelic]
+      logs:
+        receivers: [otlp, filelog]
+        processors: [memory_limiter, k8sattributes, transform/logs-service-name, resource/cluster, batch]
+        exporters: [otlphttp/loki]
+      logs/newrelic:
+        receivers: [filelog]
+        processors: [memory_limiter, k8sattributes, transform/logs-service-name, filter/only-togglemaster, resource/cluster, batch]
+        exporters: [otlphttp/newrelic]

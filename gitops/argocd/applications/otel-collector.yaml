@@ -1,0 +1,30 @@
+# OpenTelemetry Collector (DaemonSet) — recebe, processa e roteia métricas, logs e traces
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: otel-collector
+  namespace: argocd
+spec:
+  project: default
+  sources:
+    # Chart oficial (versão fixada)...
+    - repoURL: https://open-telemetry.github.io/opentelemetry-helm-charts
+      chart: opentelemetry-collector
+      targetRevision: 0.178.3
+      helm:
+        releaseName: otel-collector
+        valueFiles:
+          - $values/gitops/observability/values/otel-collector.yaml
+    # ...com os values versionados no NOSSO repositório
+    - repoURL: https://github.com/ksantanac/tech-challenge-fase-4.git
+      targetRevision: HEAD
+      ref: values
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: observability
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

@@ -54,12 +54,15 @@ module "messaging" {
 }
 
 # ---------------------------------------------------------------------------
-# 5. ECR — 5 repositórios de imagem
+# 5. ECR — repositórios de imagem (5 microsserviços + self-healing da Fase 4)
 # ---------------------------------------------------------------------------
 module "ecr" {
-  source   = "./modules/ecr"
-  project  = var.project
-  services = ["auth-service", "flag-service", "targeting-service", "evaluation-service", "analytics-service"]
+  source  = "./modules/ecr"
+  project = var.project
+  services = [
+    "auth-service", "flag-service", "targeting-service", "evaluation-service", "analytics-service",
+    "self-healing",
+  ]
 }
 
 # ---------------------------------------------------------------------------

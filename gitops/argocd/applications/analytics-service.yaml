@@ -6,7 +6,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/ksantanac/tech-challenge-fase-3.git
+    repoURL: https://github.com/ksantanac/tech-challenge-fase-4.git
     targetRevision: HEAD
     path: gitops/apps/analytics-service
   destination:

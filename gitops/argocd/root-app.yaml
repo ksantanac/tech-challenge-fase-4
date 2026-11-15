@@ -1,4 +1,5 @@
-# App of Apps: este Application cria os 5 Applications dos microsserviços.
+# App of Apps: este Application cria todos os outros (5 microsserviços + stack de
+# observabilidade + self-healing + gerador de tráfego).
 # Aplique UMA vez:  kubectl apply -f gitops/argocd/root-app.yaml
 apiVersion: argoproj.io/v1alpha1
 kind: Application
@@ -8,7 +9,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/ksantanac/tech-challenge-fase-3.git
+    repoURL: https://github.com/ksantanac/tech-challenge-fase-4.git
     targetRevision: HEAD
     path: gitops/argocd/applications
   destination:

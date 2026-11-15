@@ -17,10 +17,38 @@ spec:
     spec:
       containers:
         - name: flag-service
-          image: 885359793851.dkr.ecr.us-east-1.amazonaws.com/flag-service:v1.0.0-477cdb3
+          image: 885359793851.dkr.ecr.us-east-1.amazonaws.com/flag-service:latest
           ports:
             - containerPort: 8002
           env:
+            # --- OpenTelemetry: identidade do serviço + destino da telemetria ---
+            - name: OTEL_SERVICE_NAME
+              value: flag-service
+            - name: HOST_IP            # OTel Collector (DaemonSet) do próprio nó
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://$(HOST_IP):4317"
+            - name: OTEL_EXPORTER_OTLP_INSECURE
+              value: "true"
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: "service.namespace=togglemaster,deployment.environment.name=production,k8s.pod.name=$(POD_NAME),k8s.namespace.name=$(POD_NAMESPACE),k8s.pod.uid=$(POD_UID)"
+            - name: OTEL_SEMCONV_STABILITY_OPT_IN   # métricas HTTP no padrão estável (igual ao Go)
+              value: "http"
+            # --- Configuração da aplicação ---
             - name: PORT
               value: "8002"
             - name: AUTH_SERVICE_URL

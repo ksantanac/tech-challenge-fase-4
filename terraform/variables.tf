@@ -39,7 +39,9 @@ variable "cluster_version" {
 variable "node_instance_type" {
   description = "Tipo das instâncias do node group"
   type        = string
-  default     = "t3.medium"
+  # Fase 4: t3.large (8 GiB, até 35 pods/nó). Com a stack de observabilidade
+  # (Prometheus, Grafana, Loki, OTel Collector) o t3.medium (17 pods/nó) não comporta.
+  default = "t3.large"
 }
 
 variable "node_desired" {

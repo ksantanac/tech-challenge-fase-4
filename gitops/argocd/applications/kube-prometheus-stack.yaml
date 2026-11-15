@@ -1,0 +1,31 @@
+# Prometheus + Grafana (+ node-exporter e kube-state-metrics) via Helm
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kube-prometheus-stack
+  namespace: argocd
+spec:
+  project: default
+  sources:
+    # Chart oficial (versão fixada)...
+    - repoURL: https://prometheus-community.github.io/helm-charts
+      chart: kube-prometheus-stack
+      targetRevision: 93.3.0
+      helm:
+        releaseName: kube-prometheus-stack
+        valueFiles:
+          - $values/gitops/observability/values/kube-prometheus-stack.yaml
+    # ...com os values versionados no NOSSO repositório
+    - repoURL: https://github.com/ksantanac/tech-challenge-fase-4.git
+      targetRevision: HEAD
+      ref: values
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: observability
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true   # CRDs do Prometheus Operator são grandes demais para o client-side apply

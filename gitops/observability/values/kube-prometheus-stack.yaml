@@ -1,0 +1,116 @@
+# =============================================================================
+# kube-prometheus-stack — Prometheus + Grafana + node-exporter + kube-state-metrics
+#
+#  - Prometheus: guarda as métricas de infraestrutura (scrape do cluster) e
+#    recebe as métricas das aplicações enviadas pelo OTel Collector (remote write).
+#  - Grafana: visualização (dashboard customizado + Loki) e alertas inteligentes
+#    (contact points PagerDuty, Discord e webhook do Self-Healing).
+# =============================================================================
+
+# Usamos o alerting do Grafana (unified alerting) -> Alertmanager não é necessário
+alertmanager:
+  enabled: false
+
+# EKS: o control plane é gerenciado pela AWS, não dá para fazer scrape dele
+kubeEtcd:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeProxy:
+  enabled: false
+defaultRules:
+  rules:
+    etcd: false
+    kubeControllerManager: false
+    kubeSchedulerAlerting: false
+    kubeSchedulerRecording: false
+    kubeProxy: false
+
+# Sem webhooks de admissão (evita Jobs de certificado que travam o sync do ArgoCD)
+prometheusOperator:
+  admissionWebhooks:
+    enabled: false
+  tls:
+    enabled: false
+
+prometheus:
+  prometheusSpec:
+    # Permite que o OTel Collector EMPURRE métricas (prometheusremotewrite)
+    enableRemoteWriteReceiver: true
+    retention: 2d
+    scrapeInterval: 30s
+    # Descobre ServiceMonitors/PodMonitors de qualquer release
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    resources:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+      limits:
+        memory: 1536Mi
+
+grafana:
+  # Usuário/senha do admin vêm de um Secret (fora do git)
+  admin:
+    existingSecret: grafana-admin
+    userKey: admin-user
+    passwordKey: admin-password
+
+  # Segredos dos contact points (PagerDuty, Discord, token do Self-Healing)
+  # injetados como variáveis de ambiente e usados no provisioning do alerting
+  envFromSecrets:
+    - name: grafana-alerting
+      optional: true
+
+  service:
+    type: LoadBalancer
+
+  defaultDashboardsTimezone: browser
+
+  grafana.ini:
+    unified_alerting:
+      enabled: true
+    feature_toggles:
+      enable: ""
+
+  # Loki como fonte de logs (o Prometheus já é criado automaticamente, uid=prometheus)
+  additionalDataSources:
+    - name: Loki
+      type: loki
+      uid: loki
+      access: proxy
+      url: http://loki.observability.svc:3100
+      jsonData:
+        maxLines: 1000
+
+  testFramework:
+    enabled: false
+
+  sidecar:
+    datasources:
+      alertmanager:
+        enabled: false   # alertmanager desabilitado (usamos o alerting do Grafana)
+    # Dashboards: ConfigMaps com o label grafana_dashboard=1 (gitops/observability/config)
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+      searchNamespace: ALL
+      folderAnnotation: grafana_folder
+      provider:
+        foldersFromFilesStructure: true
+    # Alerting como código: regras, contact points e políticas (label grafana_alert=1)
+    alerts:
+      enabled: true
+      label: grafana_alert
+      labelValue: "1"
+      searchNamespace: ALL
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi

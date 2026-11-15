@@ -1,0 +1,30 @@
+# Loki — centralização dos logs de todos os contêineres
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: loki
+  namespace: argocd
+spec:
+  project: default
+  sources:
+    # Chart oficial (versão fixada)...
+    - repoURL: https://grafana.github.io/helm-charts
+      chart: loki
+      targetRevision: 7.6.0
+      helm:
+        releaseName: loki
+        valueFiles:
+          - $values/gitops/observability/values/loki.yaml
+    # ...com os values versionados no NOSSO repositório
+    - repoURL: https://github.com/ksantanac/tech-challenge-fase-4.git
+      targetRevision: HEAD
+      ref: values
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: observability
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
