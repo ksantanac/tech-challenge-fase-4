@@ -1,0 +1,62 @@
+# Gerador de tráfego: simula usuários do ToggleMaster (~5 req/s) para manter
+# métricas, traces e logs fluindo o tempo todo (dashboard "vivo" e alertas reais).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: traffic-generator
+  namespace: togglemaster
+  labels:
+    app: traffic-generator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: traffic-generator
+  template:
+    metadata:
+      labels:
+        app: traffic-generator
+    spec:
+      containers:
+        - name: traffic-generator
+          image: curlimages/curl:8.11.1
+          env:
+            - name: SERVICE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: togglemaster-secrets
+                  key: SERVICE_API_KEY
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              echo "level=INFO msg=\"gerador de trafego iniciado\""
+              FLAGS="novo-checkout dark-mode pagamento-pix banner-black-friday"
+              AUTH="Authorization: Bearer ${SERVICE_API_KEY}"
+              n=0; erros=0
+              req() {
+                code=$(curl -s -o /dev/null -m 5 -w "%{http_code}" "$@")
+                if [ "$code" -ge 500 ] || [ "$code" = "000" ]; then
+                  erros=$((erros + 1))
+                  echo "level=WARN msg=\"resposta com erro\" status=$code url=\"$*\""
+                fi
+                n=$((n + 1))
+              }
+              while true; do
+                for f in $FLAGS; do
+                  req "http://evaluation-service:8004/evaluate?user_id=user-$RANDOM&flag_name=$f"
+                done
+                req -H "$AUTH" http://auth-service:8001/validate
+                req -H "$AUTH" http://flag-service:8002/flags
+                req -H "$AUTH" http://targeting-service:8003/rules/novo-checkout
+                if [ $((n % 700)) -lt 7 ]; then
+                  echo "level=INFO msg=\"resumo\" requisicoes=$n erros_5xx=$erros"
+                fi
+                sleep 1
+              done
+          resources:
+            requests:
+              cpu: "20m"
+              memory: "16Mi"
+            limits:
+              cpu: "100m"
+              memory: "64Mi"

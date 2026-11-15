@@ -1,0 +1,21 @@
+# Gerador de tráfego — simula usuários do ToggleMaster
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: traffic-generator
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/ksantanac/tech-challenge-fase-4.git
+    targetRevision: HEAD
+    path: gitops/apps/traffic-generator
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: togglemaster
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

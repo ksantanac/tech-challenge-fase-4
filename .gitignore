@@ -15,18 +15,24 @@ terraform.rc
 # ===== Credenciais / segredos =====
 .env
 *.env
+.env.*
+!.env.observability.example
 .aws/
 *.local.sh
 # manifesto de secret com valores reais (fica só local)
 gitops/apps/**/secret.yaml
 
 # ===== Não versionar (uso pessoal / entrega) =====
-POSTECH - Tech Challenge - Fase 3.pdf
+POSTECH - Tech Challenge - Fase *.pdf
 *.pdf
 docs/VIDEO-ROTEIRO.md
 docs/TESTE-LOCAL.md
 docs/*-ROTEIRO.md
 docs/DEPLOY-GUIDE.md
+docs/CONTAS-*.md
+docs/linkedin-*
+docs/prints/
+docs/GUIA-*.md
 docs/*GUIDE*
 docs/*GUIA*
 
