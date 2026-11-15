@@ -1,6 +1,6 @@
 name: CI Python (reusável)
 
-# Pipeline de CI + DevSecOps para os microsserviços em Python (flag, targeting, analytics).
+# Pipeline de CI + DevSecOps para os serviços em Python (flag, targeting, analytics, self-healing).
 on:
   workflow_call:
     inputs:
@@ -148,5 +148,10 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add gitops/apps/${{ inputs.service }}/deployment.yaml
-          git commit -m "gitops(${{ inputs.service }}): deploy ${{ needs.docker.outputs.image_tag }} [skip ci]" || echo "sem mudanças"
-          git push
+          git commit -m "gitops(${{ inputs.service }}): deploy ${{ needs.docker.outputs.image_tag }} [skip ci]" || { echo "sem mudanças"; exit 0; }
+          # Vários pipelines podem terminar juntos: rebase + nova tentativa evita push rejeitado
+          for i in 1 2 3 4 5; do
+            git pull --rebase origin main && git push && exit 0
+            echo "push concorrente, tentando de novo ($i)..."; sleep $((RANDOM % 10 + 5))
+          done
+          exit 1

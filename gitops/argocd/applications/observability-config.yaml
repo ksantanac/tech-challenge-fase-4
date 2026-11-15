@@ -1,0 +1,21 @@
+# Dashboard customizado + alerting (regra, contact points, políticas) do Grafana, como código
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: observability-config
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/ksantanac/tech-challenge-fase-4.git
+    targetRevision: HEAD
+    path: gitops/observability/config
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: observability
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

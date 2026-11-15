@@ -1,0 +1,23 @@
+name: self-healing
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "self-healing/**"
+      - ".github/workflows/self-healing.yml"
+      - ".github/workflows/_ci-python.yml"
+  pull_request:
+    paths:
+      - "self-healing/**"
+
+permissions:
+  contents: write
+
+jobs:
+  ci:
+    uses: ./.github/workflows/_ci-python.yml
+    with:
+      service: self-healing
+    secrets: inherit

@@ -1,0 +1,146 @@
+# =============================================================================
+# Alerting como código (Grafana Unified Alerting). O sidecar do Grafana carrega
+# todo ConfigMap com o label grafana_alert=1.
+#
+#   Regra:          taxa de erros HTTP 5xx do auth-service > 5% por 1 minuto
+#   Contact point:  togglemaster-oncall
+#                     ├─ PagerDuty  -> abre o incidente automaticamente
+#                     ├─ Discord    -> notificação detalhada (ChatOps)
+#                     └─ Webhook    -> serviço self-healing (rollout restart)
+#
+# Os segredos (chave do PagerDuty, webhook do Discord, token do self-healing)
+# NÃO ficam no git: vêm de variáveis de ambiente do Grafana (Secret grafana-alerting).
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-alerting-togglemaster
+  namespace: observability
+  labels:
+    grafana_alert: "1"
+data:
+  togglemaster-alerting.yaml: |-
+    apiVersion: 1
+
+    # --------------------------------------------------------------------------
+    # Templates das notificações
+    # --------------------------------------------------------------------------
+    templates:
+      - orgId: 1
+        name: togglemaster-templates
+        template: |
+          {{ define "togglemaster.title" }}{{ if eq .Status "firing" }}🚨 [FIRING] {{ else }}✅ [RESOLVED] {{ end }}{{ .CommonLabels.alertname }}{{ end }}
+
+          {{ define "togglemaster.message" }}{{ range .Alerts }}
+          **Serviço:** `{{ .Labels.service }}`  |  **Severidade:** `{{ .Labels.severity }}`  |  **Status:** `{{ .Status }}`
+          **Resumo:** {{ .Annotations.summary }}
+          **Detalhes:** {{ .Annotations.description }}
+          **Início:** {{ .StartsAt.Format "02/01/2006 15:04:05 MST" }}
+          {{ if eq .Status "firing" }}**Ação automática:** self-healing acionado → `kubectl rollout restart deployment/{{ .Labels.deployment }}`
+          {{ else }}**Recuperado em:** {{ .EndsAt.Format "02/01/2006 15:04:05 MST" }}
+          {{ end }}**Runbook:** {{ .Annotations.runbook_url }}
+          {{ if .DashboardURL }}**Dashboard:** {{ .DashboardURL }}{{ end }}
+          {{ end }}{{ end }}
+
+          {{ define "togglemaster.pagerduty.summary" }}{{ .CommonLabels.alertname }} — {{ .CommonAnnotations.summary }}{{ end }}
+
+    # --------------------------------------------------------------------------
+    # Contact point: um alerta -> PagerDuty + Discord + Self-Healing
+    # --------------------------------------------------------------------------
+    contactPoints:
+      - orgId: 1
+        name: togglemaster-oncall
+        receivers:
+          - uid: tm-pagerduty
+            type: pagerduty
+            settings:
+              integrationKey: ${PAGERDUTY_INTEGRATION_KEY}
+              severity: critical
+              class: http-5xx
+              component: '{{ .CommonLabels.service }}'
+              group: togglemaster
+              summary: '{{ template "togglemaster.pagerduty.summary" . }}'
+          - uid: tm-discord
+            type: discord
+            settings:
+              url: ${DISCORD_WEBHOOK_URL}
+              title: '{{ template "togglemaster.title" . }}'
+              message: '{{ template "togglemaster.message" . }}'
+              use_discord_username: false
+          - uid: tm-self-healing
+            type: webhook
+            settings:
+              url: http://self-healing.observability.svc:8080/webhook/grafana
+              httpMethod: POST
+              authorization_scheme: Bearer
+              authorization_credentials: ${SELF_HEALING_TOKEN}
+
+    # --------------------------------------------------------------------------
+    # Política de notificação (anti "alert fatigue": agrupa e não repete à toa)
+    # --------------------------------------------------------------------------
+    policies:
+      - orgId: 1
+        receiver: togglemaster-oncall
+        group_by: ["grafana_folder", "alertname"]
+        group_wait: 10s
+        group_interval: 1m
+        repeat_interval: 4h
+
+    # --------------------------------------------------------------------------
+    # Regra de alerta
+    # --------------------------------------------------------------------------
+    groups:
+      - orgId: 1
+        name: togglemaster-slo
+        folder: ToggleMaster
+        interval: 30s
+        rules:
+          - uid: auth-service-5xx-rate
+            title: "auth-service: taxa de erros 5xx acima de 5%"
+            condition: C
+            data:
+              - refId: A
+                relativeTimeRange:
+                  from: 300
+                  to: 0
+                datasourceUid: prometheus
+                model:
+                  refId: A
+                  instant: true
+                  intervalMs: 1000
+                  maxDataPoints: 43200
+                  # % de respostas 5xx do auth-service no último minuto (métrica do OpenTelemetry)
+                  expr: >-
+                    100 * (sum(rate(http_server_request_duration_seconds_count{service_name="auth-service", http_response_status_code=~"5.."}[1m])) or vector(0))
+                    / sum(rate(http_server_request_duration_seconds_count{service_name="auth-service"}[1m]))
+              - refId: C
+                datasourceUid: __expr__
+                model:
+                  refId: C
+                  type: threshold
+                  expression: A
+                  conditions:
+                    - evaluator:
+                        type: gt
+                        params: [5]
+            # precisa ficar acima do limite por 1 min (evita alarme por um pico isolado)
+            for: 1m
+            noDataState: OK
+            execErrState: Error
+            annotations:
+              summary: "A taxa de erros HTTP 5xx do auth-service passou de 5% (limite do SLO)."
+              description: >-
+                O auth-service está respondendo 5xx no /validate. Como flag-service e
+                targeting-service dependem dele, a falha se propaga em cascata até o
+                evaluation-service. Verifique os logs no Loki e o trace no New Relic.
+              runbook_url: https://github.com/ksantanac/tech-challenge-fase-4/blob/main/docs/RUNBOOK.md
+              __dashboardUid__: togglemaster-overview
+              __panelId__: "4"
+            labels:
+              severity: critical
+              team: togglemaster
+              service: auth-service
+              # usados pelo self-healing para decidir a ação corretiva:
+              deployment: auth-service
+              remediation: rollout-restart
+            isPaused: false

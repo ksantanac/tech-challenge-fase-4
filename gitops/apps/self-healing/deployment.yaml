@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: self-healing
+  namespace: observability
+  labels:
+    app: self-healing
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: self-healing
+  template:
+    metadata:
+      labels:
+        app: self-healing
+    spec:
+      serviceAccountName: self-healing
+      containers:
+        - name: self-healing
+          # A tag é atualizada automaticamente pelo pipeline de CI (GitOps).
+          image: 885359793851.dkr.ecr.us-east-1.amazonaws.com/self-healing:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: TARGET_NAMESPACE
+              value: togglemaster
+            - name: ALLOWED_DEPLOYMENTS
+              value: "auth-service,flag-service,targeting-service,evaluation-service,analytics-service"
+            - name: COOLDOWN_SECONDS
+              value: "300"
+            # token do webhook e URL do Discord vêm de Secret (fora do git)
+            - name: WEBHOOK_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: self-healing
+                  key: webhook-token
+            - name: DISCORD_WEBHOOK_URL
+              valueFrom:
+                secretKeyRef:
+                  name: self-healing
+                  key: discord-webhook-url
+                  optional: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "128Mi"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 15
