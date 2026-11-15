@@ -1,0 +1,37 @@
+# OTel Collector do ambiente LOCAL (docker-compose).
+# Mesma ideia do cluster: os serviços mandam OTLP para cá e o Collector roteia.
+#   traces   -> Jaeger (UI em http://localhost:16686)
+#   métricas -> endpoint Prometheus em http://localhost:8889/metrics
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch: {}
+
+exporters:
+  otlp/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    resource_to_telemetry_conversion:
+      enabled: true
+  debug:
+    verbosity: basic
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp/jaeger, debug]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [prometheus]

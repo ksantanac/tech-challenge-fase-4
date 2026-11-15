@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -20,6 +21,7 @@ func (a *App) healthHandler(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) evaluationHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	ctx := r.Context() // carrega o span da requisição (trace distribuído)
 
 	// 1. Parsear os query parameters
 	userID := r.URL.Query().Get("user_id")
@@ -31,22 +33,24 @@ func (a *App) evaluationHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 2. Obter a decisão (lógica de cache/serviço está em evaluator.go)
-	result, err := a.getDecision(userID, flagName)
+	result, err := a.getDecision(ctx, userID, flagName)
 	if err != nil {
 		// Se o erro for "não encontrado", retornamos 'false' (comportamento seguro)
 		if _, ok := err.(*NotFoundError); ok {
 			result = false
 		} else {
 			// Outros erros (serviços offline, etc)
-			log.Printf("Erro ao avaliar flag '%s': %v", flagName, err)
+			log.Printf("level=ERROR msg=\"erro ao avaliar flag\" flag=%s error=%q", flagName, err)
 			http.Error(w, `{"error": "Erro interno ao avaliar a flag"}`, http.StatusBadGateway)
 			return
 		}
 	}
+	recordEvaluation(ctx, flagName, result)
 
 	// 3. Enviar evento para SQS (assincronamente)
-	// Isso não bloqueia a resposta para o cliente.
-	go a.sendEvaluationEvent(userID, flagName, result)
+	// Isso não bloqueia a resposta para o cliente. WithoutCancel mantém o trace
+	// mesmo depois que a resposta HTTP já foi enviada.
+	go a.sendEvaluationEvent(context.WithoutCancel(ctx), userID, flagName, result)
 
 	// 4. Retornar a resposta
 	w.WriteHeader(http.StatusOK)

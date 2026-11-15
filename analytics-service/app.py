@@ -9,10 +9,17 @@ import boto3
 from botocore.exceptions import NoCredentialsError, ClientError
 from flask import Flask, jsonify
 from dotenv import load_dotenv
+from opentelemetry import metrics, propagate, trace
+from opentelemetry.instrumentation.utils import suppress_instrumentation
+import telemetry
 
-# Configura o logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Observabilidade (OpenTelemetry) + logging com trace_id.
+# Fica antes dos clientes Boto3 para as chamadas AWS já nascerem instrumentadas.
+telemetry.setup_telemetry()
 log = logging.getLogger(__name__)
+tracer = trace.get_tracer("analytics-service")
+events_counter = metrics.get_meter("analytics-service").create_counter(
+    "togglemaster.analytics.events", description="Eventos de avaliação processados (status=ok|error)")
 
 # Carrega .env para desenvolvimento local
 load_dotenv()
@@ -45,7 +52,37 @@ except Exception as e:
 # --- SQS Worker ---
 
 def process_message(message):
-    """ Processa uma única mensagem SQS e a insere no DynamoDB """
+    """ Processa uma única mensagem SQS e a insere no DynamoDB.
+
+    O evaluation-service manda o contexto do trace (traceparent) nos MessageAttributes.
+    Extraímos esse contexto para que o processamento continue o MESMO trace distribuído.
+    """
+    carrier = {
+        name: attr.get("StringValue")
+        for name, attr in message.get("MessageAttributes", {}).items()
+        if attr.get("DataType") == "String"
+    }
+    parent_ctx = propagate.extract(carrier)
+    queue_name = SQS_QUEUE_URL.rsplit("/", 1)[-1]
+    with tracer.start_as_current_span(
+        f"{queue_name} process",
+        context=parent_ctx,
+        kind=trace.SpanKind.CONSUMER,
+        attributes={
+            "messaging.system": "aws_sqs",
+            "messaging.operation": "process",
+            "messaging.destination.name": queue_name,
+            "messaging.message.id": message["MessageId"],
+        },
+    ) as span:
+        ok = _process_message(message)
+        if not ok:
+            span.set_status(trace.Status(trace.StatusCode.ERROR, "falha ao processar a mensagem"))
+        events_counter.add(1, {"status": "ok" if ok else "error"})
+
+
+def _process_message(message):
+    """ Lógica original: salva o evento no DynamoDB e remove a mensagem da fila """
     try:
         log.info(f"Processando mensagem ID: {message['MessageId']}")
         body = json.loads(message['Body'])
@@ -75,7 +112,8 @@ def process_message(message):
             QueueUrl=SQS_QUEUE_URL,
             ReceiptHandle=message['ReceiptHandle']
         )
-        
+        return True
+
     except json.JSONDecodeError:
         log.error(f"Erro ao decodificar JSON da mensagem ID: {message['MessageId']}")
         # Não deleta a mensagem, pode ser uma "poison pill"
@@ -85,18 +123,23 @@ def process_message(message):
     except Exception as e:
         log.error(f"Erro inesperado ao processar {message['MessageId']}: {e}")
         # Não deleta a mensagem, tenta novamente
+    return False
+
 
 def sqs_worker_loop():
     """ Loop principal do worker que ouve a fila SQS """
     log.info("Iniciando o worker SQS...")
     while True:
         try:
-            # Long-polling: espera até 20s por mensagens
-            response = sqs_client.receive_message(
-                QueueUrl=SQS_QUEUE_URL,
-                MaxNumberOfMessages=10,  # Processa em lotes de até 10
-                WaitTimeSeconds=20
-            )
+            # Long-polling: espera até 20s por mensagens. O polling em si não gera
+            # span (seria ruído de 20s); o que importa é o processamento de cada evento.
+            with suppress_instrumentation():
+                response = sqs_client.receive_message(
+                    QueueUrl=SQS_QUEUE_URL,
+                    MaxNumberOfMessages=10,  # Processa em lotes de até 10
+                    WaitTimeSeconds=20,
+                    MessageAttributeNames=['All']  # traz o traceparent
+                )
             
             messages = response.get('Messages', [])
             if not messages:
@@ -118,6 +161,7 @@ def sqs_worker_loop():
 # --- Servidor Flask (Apenas para Health Check) ---
 
 app = Flask(__name__)
+telemetry.instrument_flask(app)
 
 @app.route('/health')
 def health():

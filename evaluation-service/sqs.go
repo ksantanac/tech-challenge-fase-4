@@ -1,12 +1,19 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/sqs"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Evento que será enviado para a fila
@@ -17,13 +24,25 @@ type EvaluationEvent struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
-// sendEvaluationEvent envia um evento para a fila SQS
-func (a *App) sendEvaluationEvent(userID, flagName string, result bool) {
+// sendEvaluationEvent envia um evento para a fila SQS.
+// O contexto do trace vai junto nos MessageAttributes (traceparent), assim o
+// analytics-service continua o MESMO trace quando consome a mensagem.
+func (a *App) sendEvaluationEvent(ctx context.Context, userID, flagName string, result bool) {
 	// Se a URL da fila não foi configurada, apenas loga localmente e sai.
 	if a.SqsSvc == nil || a.SqsQueueURL == "" {
 		log.Printf("[SQS_DISABLED] Evento: User '%s', Flag '%s', Result '%t'", userID, flagName, result)
 		return
 	}
+
+	queueName := a.SqsQueueURL[strings.LastIndex(a.SqsQueueURL, "/")+1:]
+	ctx, span := tracer.Start(ctx, queueName+" publish",
+		trace.WithSpanKind(trace.SpanKindProducer),
+		trace.WithAttributes(
+			attribute.String("messaging.system", "aws_sqs"),
+			attribute.String("messaging.operation", "publish"),
+			attribute.String("messaging.destination.name", queueName),
+		))
+	defer span.End()
 
 	event := EvaluationEvent{
 		UserID:    userID,
@@ -38,15 +57,27 @@ func (a *App) sendEvaluationEvent(userID, flagName string, result bool) {
 		return
 	}
 
+	// Propagação do contexto do trace via MessageAttributes
+	carrier := propagation.MapCarrier{}
+	otel.GetTextMapPropagator().Inject(ctx, carrier)
+	attrs := make(map[string]*sqs.MessageAttributeValue, len(carrier))
+	for k, v := range carrier {
+		attrs[k] = &sqs.MessageAttributeValue{DataType: aws.String("String"), StringValue: aws.String(v)}
+	}
+
 	// Envia a mensagem
-	_, err = a.SqsSvc.SendMessage(&sqs.SendMessageInput{
-		MessageBody: aws.String(string(body)),
-		QueueUrl:    aws.String(a.SqsQueueURL),
+	out, err := a.SqsSvc.SendMessageWithContext(ctx, &sqs.SendMessageInput{
+		MessageBody:       aws.String(string(body)),
+		QueueUrl:          aws.String(a.SqsQueueURL),
+		MessageAttributes: attrs,
 	})
 
 	if err != nil {
-		log.Printf("Erro ao enviar mensagem para SQS: %v", err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		log.Printf("level=ERROR msg=\"erro ao enviar mensagem para SQS\" error=%q", err)
 	} else {
+		span.SetAttributes(attribute.String("messaging.message.id", aws.StringValue(out.MessageId)))
 		log.Printf("Evento de avaliação enviado para SQS (Flag: %s)", flagName)
 	}
 }
